@@ -1,2 +1,2 @@
-LOD 0 "main.c"
+LOD 0 "c.bat"
 OSR 0

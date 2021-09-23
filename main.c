@@ -3,15 +3,16 @@
 #include <string.h>
 
 #define MAX_TOKENS 1024
-#define STRING_MAX 512
+#define STRING_MAX 255
 
 #define ctoi(c) (c - '0')
 
-typedef unsigned char u8;
+typedef unsigned char  u8;
+typedef unsigned short u16;
 
 typedef struct {
     char name[64];
-    int pos; // Position of function.
+    u16 pos; // Position of function.
 } Function;
 
 u8 memory[65536] = {0};
@@ -20,6 +21,7 @@ u8 registers[32] = {0};
 ////////////////////////////////
 // Special registers:
 // REG[31] = used for CMP flag.
+// REG[30] = used for string lengths.
 ////////////////////////////////
 
 int line = 1;
@@ -101,7 +103,7 @@ static void cleanup_source(char *input) {
     input = start;
     dest = start;
     
-    // Remove trailing whitespace pass
+    // Remove trailing whitespace pass; the previous pass got rid of all multiple spaces in a row, so this is trivial.
     while (*input) {
         if (*input == ' ' && *(input+1) == '\n') ++input;
         *dest++ = *input++;
@@ -110,7 +112,7 @@ static void cleanup_source(char *input) {
 }
 
 static int recalculate_line(const char *input) {
-    const unsigned len = strlen(input);
+    const u16 len = strlen(input);
     line = 1;
     for (int i = 0; i < curpos; ++i) {
         if (input[i] == '\n') line++;
@@ -118,10 +120,9 @@ static int recalculate_line(const char *input) {
 }
 
 // Gets the index of any [] operation. Figures out any recursive indexing inside the [] if needed, eg. REG[MEM[REG[15]]].
-static int get_index(char parameter[32]) {
-    int last_index = 0;
+static u16 get_index(char parameter[32]) {
+    u16 last_index = 0;
     int reg = 0;
-    int count = 0;
     int current_bracket = 0;
     for (int i = 32; i > 0; --i) {
         if (parameter[i] == '[') {
@@ -156,7 +157,7 @@ static int get_type(char parameter[32]) {
     }
 }
 
-static void jump_to_subroutine(int pos) {
+static void jump_to_subroutine(u16 pos) {
     if (sp == 512) {
         fprintf(stderr, "Error (Line %d): Stack overflow error!\n", line);
         exit(1);
@@ -169,6 +170,7 @@ static void return_from_subroutine(void) {
     curpos = stack[--sp]; // Pop stack
 }
 
+// Gets all the functions and stores it in an array.
 static void function_pass(const char *input, int input_length) {
     char curr_line[32];
     int ch = 0;
@@ -201,18 +203,18 @@ static void function_pass(const char *input, int input_length) {
 }
 
 static void execute_command(const char *input, char params[32][MAX_TOKENS], int argc) {
-    const unsigned input_length = strlen(input);
+    const u16 input_length = strlen(input);
     if (0==strcmp(params[0], "SET")) {
         switch (get_type(params[1])) {
             case TYPE_REGISTER: {
-                int index = get_index(params[1]);
+                u16 index = get_index(params[1]);
                 switch (get_type(params[2])) {
                     case TYPE_REGISTER: {
-                        int to_index = get_index(params[2]);
+                        u16 to_index = get_index(params[2]);
                         registers[index] = registers[to_index];
                     } break;
                     case TYPE_MEMORY: {
-                        int to_index = get_index(params[2]);
+                        u16 to_index = get_index(params[2]);
                         registers[index] = memory[to_index];
                     } break;
                     case TYPE_CHAR: {
@@ -224,14 +226,14 @@ static void execute_command(const char *input, char params[32][MAX_TOKENS], int 
                 }
             } break;
             case TYPE_MEMORY: {
-                int index = get_index(params[1]);
+                u16 index = get_index(params[1]);
                 switch (get_type(params[2])) {
                     case TYPE_REGISTER: {
-                        int to_index = get_index(params[2]);
+                        u16 to_index = get_index(params[2]);
                         memory[index] = registers[to_index];
                     } break;
                     case TYPE_MEMORY: {
-                        int to_index = get_index(params[2]);
+                        u16 to_index = get_index(params[2]);
                         memory[index] = memory[to_index];
                     } break;
                     case TYPE_CHAR: {
@@ -245,7 +247,7 @@ static void execute_command(const char *input, char params[32][MAX_TOKENS], int 
         }
     } else if (0==strcmp(params[0], "OUT")) {
         if (get_type(params[1]) == TYPE_REGISTER) {
-            int index = get_index(params[1]);
+            u16 index = get_index(params[1]);
             putchar(registers[index]);
             //printf("%d\n", registers[index]);
         } else {
@@ -253,7 +255,7 @@ static void execute_command(const char *input, char params[32][MAX_TOKENS], int 
         }
     } else if (0==strcmp(params[0], "GET")) {
         if (get_type(params[1]) == TYPE_REGISTER) {
-            int index = get_index(params[1]);
+            u16 index = get_index(params[1]);
             registers[index] = getchar();
         } else {
             fprintf(stderr, "Error(Line %d): \"GET\" only writes to a register.\n", line);
@@ -262,8 +264,8 @@ static void execute_command(const char *input, char params[32][MAX_TOKENS], int 
         if (get_type(params[1]) != TYPE_REGISTER || get_type(params[2]) != TYPE_REGISTER) {
             fprintf(stderr, "Error(Line %d): \"CMP\" requires two registers.\n", line);
         } else {
-            int from_index = get_index(params[1]);
-            int to_index   = get_index(params[2]);
+            u16 from_index = get_index(params[1]);
+            u16 to_index   = get_index(params[2]);
             if (registers[to_index] == registers[from_index])     registers[31] = 1;
             else if (registers[to_index] < registers[from_index]) registers[31] = 2;
             else                                                  registers[31] = 0;
@@ -275,7 +277,7 @@ static void execute_command(const char *input, char params[32][MAX_TOKENS], int 
                 recalculate_line(input);
             }
         }
-    } else if (0==strcmp(params[0], "SKI")) { // Skip next command if REG[31] == 0
+    } else if (0==strcmp(params[0], "SKP")) { // Skip next command if REG[31] == 0
         if (registers[31] == 0) {
             while (input[++curpos] != '\n');
             recalculate_line(input);
@@ -310,8 +312,8 @@ static void execute_command(const char *input, char params[32][MAX_TOKENS], int 
             operation = OPERATION_DIV;
         }
         if (get_type(params[1]) == TYPE_REGISTER && get_type(params[2]) == TYPE_REGISTER) {
-            int from_index = get_index(params[2]);
-            int to_index = get_index(params[1]);
+            u16 from_index = get_index(params[2]);
+            u16 to_index = get_index(params[1]);
             switch (operation) {
                 case OPERATION_ADD: {
                     registers[to_index] += registers[from_index];
@@ -334,7 +336,7 @@ static void execute_command(const char *input, char params[32][MAX_TOKENS], int 
         if (0==strcmp(params[0], "INC")) operation = OPERATION_ADD;
         if (0==strcmp(params[0], "DEC")) operation = OPERATION_SUB;
         if (get_type(params[1]) == TYPE_REGISTER) {
-            int index = get_index(params[1]);
+            u16 index = get_index(params[1]);
             if (operation == OPERATION_ADD)
                 registers[index]++;
             else
@@ -343,7 +345,7 @@ static void execute_command(const char *input, char params[32][MAX_TOKENS], int 
             fprintf(stderr, "Error (Line %d): Maths operations work with registers only.\n", line);
         }
     } else if (0==strcmp(params[0], "STR")) { // Sets memory starting at position to null-terminated string data.
-        int pos = 0;
+        u16 pos = 0;
         switch (get_type(params[1])) {
             case TYPE_INT: {
                 pos = atoi(params[1]);
@@ -362,18 +364,19 @@ static void execute_command(const char *input, char params[32][MAX_TOKENS], int 
         }
         char string[STRING_MAX] = {0};
         strcpy(string, params[2]+1);
-        int length = strlen(string)-1; // -1 to remove the closing quote.
+        u16 length = strlen(string)-1; // -1 to remove the closing quote.
+        registers[30] = length;
         string[length] = 0;
         for (int i = 0; i <= length; ++i) // Include the null-terminator.
             memory[pos+i] = string[i];
     } else if (0==strcmp(params[0], "OSR")) { // Output a string.
         switch (get_type(params[1])) {
             case TYPE_REGISTER: {
-                int pos = registers[get_index(params[1])];
+                u16 pos = registers[get_index(params[1])];
                 printf("%s", memory+pos);
             } break;
             case TYPE_INT: {
-                int pos = atoi(params[1]);
+                u16 pos = atoi(params[1]);
                 printf("%s", memory+pos);
             } break;
             case TYPE_STRING: {
@@ -390,7 +393,7 @@ static void execute_command(const char *input, char params[32][MAX_TOKENS], int 
     } else if (0==strcmp(params[0], "LOD")) {
         char file_path[STRING_MAX];
         unsigned len;
-        int pos;
+        u16 pos;
         switch (get_type(params[1])) {
             case TYPE_REGISTER: {
                 pos = registers[get_index(params[1])];
@@ -405,7 +408,7 @@ static void execute_command(const char *input, char params[32][MAX_TOKENS], int 
         
         strcpy(file_path, params[2]);
         file_path[strlen(file_path)-1] = 0; // Clip the ending quote.
-        char*str = read_file(file_path+1, &len); // Clip first quote.
+        char *str = read_file(file_path+1, &len); // Clip first quote.
         
         // Load it into memory.
         for (int i = 0; i <= len; ++i) { // Include null-terminator.
@@ -414,13 +417,20 @@ static void execute_command(const char *input, char params[32][MAX_TOKENS], int 
     }
 }
 
-int main(void) {
+int main(int argcount, char **argv) {
+    char file[STRING_MAX];
+    if (argcount != 2) {
+        strcpy(file, "file.asm");
+    } else {
+        strcpy(file, argv[1]);
+    }
+    
     char tokens[32][MAX_TOKENS];
     
     char *input;
     unsigned input_length;
     
-    input = read_file("file.asm", &input_length);
+    input = read_file(file, &input_length);
     
     cleanup_source(input);
     input_length = strlen(input);
