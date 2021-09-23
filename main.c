@@ -59,28 +59,22 @@ static int get_index(char parameter[32]) {
     int reg = 0;
     int count = 0;
     int current_bracket = 0;
-    //printf("Parameter: %s\n", parameter);
     for (int i = 32; i > 0; --i) {
         if (parameter[i] == '[') {
-            //printf("Bracket #%d: Position: %d\n", current_bracket, i);
             if (parameter[i-1] == 'G') reg = 1;
             if (current_bracket == 0) { // Getting the base value.
                 char integer[32];
                 strcpy(integer, parameter + i + 1);
-                //printf("Integer string before clipping: %s\n", integer);
                 int j;
                 for (j = 0; integer[j] == ']'; ++j); // Clipping off the ]
                 integer[j+1] = 0;
-                //printf("Integer string after clipping: %s\n", integer);
                 last_index = atoi(integer);
-                //printf("Base Index: %d\n", last_index);
             } else { // Get the next index in the chain.
                 if (reg) {
                     last_index = registers[last_index];
                 } else {
                     last_index = memory[last_index];
                 }
-                //printf("Next Index: %d\n", last_index);
             }
             current_bracket++;
         }
