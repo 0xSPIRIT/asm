@@ -17,7 +17,7 @@ u8 memory[65536] = {0};
 u8 registers[32] = {0};
 
 ////////////////////////////////
-// Ueditable registers:
+// Special registers:
 // REG[31] = used for CMP flag.
 ////////////////////////////////
 
