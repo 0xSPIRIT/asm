@@ -34,7 +34,8 @@ enum {
     TYPE_REGISTER,
     TYPE_MEMORY,
     TYPE_CHAR,
-    TYPE_INT
+    TYPE_INT,
+    TYPE_STRING
 };
 
 enum {
@@ -52,13 +53,39 @@ static int recalculate_line(const char *input) {
     }
 }
 
+// Gets the index of any [] operation. Figures out any recursive indexing inside the [] if needed, eg. REG[MEM[REG[15]]].
 static int get_index(char parameter[32]) {
-    char string[32];
-    strncpy(string, parameter, 32);
-    for (int i = 0; i < 32; i += 1)
-        if (string[i] == ']') string[i] = 0;
-    int out = atoi(string+4);
-    return out;
+    int last_index = 0;
+    int reg = 0;
+    int count = 0;
+    int current_bracket = 0;
+    //printf("Parameter: %s\n", parameter);
+    for (int i = 32; i > 0; --i) {
+        if (parameter[i] == '[') {
+            //printf("Bracket #%d: Position: %d\n", current_bracket, i);
+            if (parameter[i-1] == 'G') reg = 1;
+            if (current_bracket == 0) { // Getting the base value.
+                char integer[32];
+                strcpy(integer, parameter + i + 1);
+                //printf("Integer string before clipping: %s\n", integer);
+                int j;
+                for (j = 0; integer[j] == ']'; ++j); // Clipping off the ]
+                integer[j+1] = 0;
+                //printf("Integer string after clipping: %s\n", integer);
+                last_index = atoi(integer);
+                //printf("Base Index: %d\n", last_index);
+            } else { // Get the next index in the chain.
+                if (reg) {
+                    last_index = registers[last_index];
+                } else {
+                    last_index = memory[last_index];
+                }
+                //printf("Next Index: %d\n", last_index);
+            }
+            current_bracket++;
+        }
+    }
+    return last_index;
 }
 
 static int get_type(char parameter[32]) {
@@ -66,6 +93,7 @@ static int get_type(char parameter[32]) {
         case 'R':  return TYPE_REGISTER;
         case 'M':  return TYPE_MEMORY;
         case '\'': return TYPE_CHAR;
+        case '"':  return TYPE_STRING;
         default:   return TYPE_INT;
     }
 }
@@ -120,10 +148,6 @@ static void execute_command(const char *input, char params[32][MAX_TOKENS], int 
         switch (get_type(params[1])) {
             case TYPE_REGISTER: {
                 int index = get_index(params[1]);
-                if (index == 31) {
-                    fprintf(stderr, "Error (Line %d): Cannot write to REG[31]!\n");
-                    return;
-                }
                 switch (get_type(params[2])) {
                     case TYPE_REGISTER: {
                         int to_index = get_index(params[2]);
@@ -164,8 +188,8 @@ static void execute_command(const char *input, char params[32][MAX_TOKENS], int 
     } else if (0==strcmp(params[0], "OUT")) {
         if (get_type(params[1]) == TYPE_REGISTER) {
             int index = get_index(params[1]);
-            //putchar(registers[index]);
-            printf("%d\n", registers[index]);
+            putchar(registers[index]);
+            //printf("%d\n", registers[index]);
         } else {
             fprintf(stderr, "Error(Line %d): \"OUT\" only takes in registers.\n", line);
         }
@@ -192,6 +216,11 @@ static void execute_command(const char *input, char params[32][MAX_TOKENS], int 
                 jump_to_subroutine(functions[i].pos);
                 recalculate_line(input);
             }
+        }
+    } else if (0==strcmp(params[0], "SKI")) { // Skip next command if REG[31] == 0
+        if (registers[31] == 0) {
+            while (input[++curpos] != '\n');
+            recalculate_line(input);
         }
     } else if (0==strcmp(params[0], "RET")) {
         return_from_subroutine();
@@ -225,10 +254,6 @@ static void execute_command(const char *input, char params[32][MAX_TOKENS], int 
         if (get_type(params[1]) == TYPE_REGISTER && get_type(params[2]) == TYPE_REGISTER) {
             int from_index = get_index(params[2]);
             int to_index = get_index(params[1]);
-            if (to_index == 31) {
-                fprintf(stderr, "Error (Line %d): Cannot write to REG[31]!\n");
-                return;
-            }
             switch (operation) {
                 case OPERATION_ADD: {
                     registers[to_index] += registers[from_index];
@@ -257,7 +282,48 @@ static void execute_command(const char *input, char params[32][MAX_TOKENS], int 
             else
                 registers[index]--;
         } else {
-            fprintf(stderr, "Error (Line %d): Maths operations work with registers only.\n");
+            fprintf(stderr, "Error (Line %d): Maths operations work with registers only.\n", line);
+        }
+    } else if (0==strcmp(params[0], "STR")) { // Sets memory starting at position to null-terminated string data.
+        int pos = 0;
+        switch (get_type(params[1])) {
+            case TYPE_INT: {
+                pos = atoi(params[1]);
+            } break;
+            case TYPE_REGISTER: {
+                pos = registers[get_index(params[1])];
+            } break;
+            default: {
+                fprintf(stderr, "Error (Line %d): \"STR\" reqiures an integer or register for the position.\n", line);
+                return;
+            } break;
+        }
+        if (get_type(params[2]) != TYPE_STRING) {
+            fprintf(stderr, "Error (Line %d): \"STR\" requires a string for the third parameter.\n", line);
+            return;
+        }
+        char string[128] = {0};
+        strcpy(string, params[2]+1);
+        int length = strlen(string)-1; // -1 to remove the closing quote.
+        string[length] = 0;
+        for (int i = 0; i <= length; ++i) // Include the null-terminator.
+            memory[pos+i] = string[i];
+    } else if (0==strcmp(params[0], "OSR")) { // Output a string.
+        switch (get_type(params[1])) {
+            case TYPE_REGISTER: {
+                int pos = registers[get_index(params[1])];
+                printf("%s", memory+pos);
+            } break;
+            case TYPE_STRING: {
+                char string[128] = {0};
+                strcpy(string, params[1]+1);
+                string[strlen(string)-1] = 0;
+                printf("%s", string);
+            } break;
+            default: {
+                fprintf(stderr, "Error (Line %d): \"OSR\" reqiures an integer or register for the position.\n", line);
+                return;
+            } break;
         }
     }
 }
@@ -266,11 +332,16 @@ int main(void) {
     char tokens[32][MAX_TOKENS];
     
     const char *input =
-        "JSR add\n"
-        "FUN add:\n"
-        "INC REG[0]\n"
-        "OUT REG[0]\n"
-        "JSR add\n";
+        "STR 0 \"Hello, World!\"\n" // Puts the array of characters sequentially in memory starting at 0.
+        "SET REG[3] 12\n" // Set a total count of the characters.
+        "JSR print\n" // Jump into to print function.
+        "FUN print:\n"
+        "SET REG[2] MEM[REG[1]]\n" // set REG[2] to the current character, with REG[1] as a coutner
+        "OUT REG[2]\n" // Output the character
+        "INC REG[1]\n" // Increment the counter.
+        "CMP REG[3] REG[1]\n" // if REG[1] > REG[3], REG[31] = 0
+        "SKI\n" // Skips next command (and ends the program) if REG[31] == 0
+        "JSR print\n";
     const unsigned input_length = strlen(input);
     
     if (input[input_length-1] != '\n') {
@@ -284,12 +355,15 @@ int main(void) {
     function_pass(input, input_length);
     
     // Tokenizing + Running the code.
-    
     char params[32][MAX_TOKENS];
+    int string = 0;
     
     ch = 0;
     for (curpos = 0; curpos < input_length; curpos += 1) {
-        if (input[curpos] == ' ') {
+        if (input[curpos] == '"') {
+            string = !string;
+        }
+        if (!string && input[curpos] == ' ') {
             argc++;
             ch = 0;
             continue;
