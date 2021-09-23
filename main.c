@@ -3,13 +3,14 @@
 #include <string.h>
 
 #define MAX_TOKENS 1024
+#define STRING_MAX 512
 
 #define ctoi(c) (c - '0')
 
 typedef unsigned char u8;
 
 typedef struct {
-    char name[32];
+    char name[64];
     int pos; // Position of function.
 } Function;
 
@@ -70,10 +71,20 @@ static char *read_file(const char *fp, unsigned *l) {
     return str;
 }
 
-static char *remove_double_spaces(char *input) {
+static void cleanup_source(char *input) {
+    // Removing double spaces, comments, tabs, and whitespace from input.
     char *dest = input;
+    char *start = input;
     int start_line = 0;
+    int comment = 0;
+    int trailing_space = 0;
     while (*input) {
+        if (*input == '/' && *(input+1) == '/') comment = 1;
+        while (comment) {
+            ++input;
+            if (*input == '\n') comment = 0;
+        }
+        
         while (*input == '\t') ++input;
         if (start_line) {
             while (*input == ' ') ++input;
@@ -81,11 +92,21 @@ static char *remove_double_spaces(char *input) {
         } else {
             while (*input == ' ' && *(input+1) == ' ') ++input;
         }
+        
         if (*input == '\n') start_line = 1;
+        
         *dest++ = *input++;
     }
     *dest = 0;
-    return dest;
+    input = start;
+    dest = start;
+    
+    // Remove trailing whitespace pass
+    while (*input) {
+        if (*input == ' ' && *(input+1) == '\n') ++input;
+        *dest++ = *input++;
+    }
+    *dest = 0;
 }
 
 static int recalculate_line(const char *input) {
@@ -162,8 +183,8 @@ static void function_pass(const char *input, int input_length) {
         if (input[i] == ':') {
             char str[32] = {0};
             strncpy(str, curr_line, 3);
-            if (0 != strcmp(str, "FUN")) {
-                fprintf(stderr, "Error(Line %d): Colon used without a function.\n", ln);
+            if (0 != strcmp(str, "SBR")) {
+                fprintf(stderr, "Error(Line %d): Colon used without a subroutine declaration.\n", ln);
             }
             char name[32] = {0};
             strcpy(name, curr_line+4);
@@ -262,7 +283,7 @@ static void execute_command(const char *input, char params[32][MAX_TOKENS], int 
     } else if (0==strcmp(params[0], "RET")) {
         return_from_subroutine();
         recalculate_line(input);
-    } else if (0==strcmp(params[0], "FUN")) {
+    } else if (0==strcmp(params[0], "SBR")) {
         // Skip over subroutine. Only enter them when called by JSR or derivatives.
         char str[32] = {0};
         int ch = 0;
@@ -339,7 +360,7 @@ static void execute_command(const char *input, char params[32][MAX_TOKENS], int 
             fprintf(stderr, "Error (Line %d): \"STR\" requires a string for the third parameter.\n", line);
             return;
         }
-        char string[128] = {0};
+        char string[STRING_MAX] = {0};
         strcpy(string, params[2]+1);
         int length = strlen(string)-1; // -1 to remove the closing quote.
         string[length] = 0;
@@ -356,7 +377,7 @@ static void execute_command(const char *input, char params[32][MAX_TOKENS], int 
                 printf("%s", memory+pos);
             } break;
             case TYPE_STRING: {
-                char string[128] = {0};
+                char string[STRING_MAX] = {0};
                 strcpy(string, params[1]+1);
                 string[strlen(string)-1] = 0;
                 printf("%s", string);
@@ -365,6 +386,30 @@ static void execute_command(const char *input, char params[32][MAX_TOKENS], int 
                 fprintf(stderr, "Error (Line %d): \"OSR\" reqiures an integer or register for the position.\n", line);
                 return;
             } break;
+        }
+    } else if (0==strcmp(params[0], "LOD")) {
+        char file_path[STRING_MAX];
+        unsigned len;
+        int pos;
+        switch (get_type(params[1])) {
+            case TYPE_REGISTER: {
+                pos = registers[get_index(params[1])];
+            } break;
+            case TYPE_INT: {
+                pos = atoi(params[1]);
+            } break;
+            default: {
+                fprintf(stderr, "Error (Line %d): LOD requies register or integer as a start position.\n");
+            } break;
+        }
+        
+        strcpy(file_path, params[2]);
+        file_path[strlen(file_path)-1] = 0; // Clip the ending quote.
+        char*str = read_file(file_path+1, &len); // Clip first quote.
+        
+        // Load it into memory.
+        for (int i = 0; i <= len; ++i) { // Include null-terminator.
+            memory[i+pos] = str[i];
         }
     }
 }
@@ -377,7 +422,8 @@ int main(void) {
     
     input = read_file("file.asm", &input_length);
     
-    remove_double_spaces(input);
+    cleanup_source(input);
+    input_length = strlen(input);
     
     if (input[input_length-1] != '\n') {
         fprintf(stderr, "Error (Bottom of file): Your program must end with a newline.\n");
