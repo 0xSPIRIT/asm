@@ -45,6 +45,49 @@ enum {
     OPERATION_MUL
 };
 
+static char *read_file(const char *fp, unsigned *l) {
+    FILE *f = fopen(fp, "r");
+    if (!f) {
+        fprintf(stderr, "Couldn't open %s!\n", fp);
+        exit(1);
+    }
+    char *str;
+    
+    long p;
+    size_t length;
+    
+    p = ftell(f);
+    fseek(f, 0, SEEK_END);
+    length = ftell(f);
+    fseek(f, p, SEEK_SET);
+    
+    str = malloc(length+1);
+    length = fread(str, 1, length, f);
+    str[length] = 0;
+    
+    if (l) *l = length;
+    
+    return str;
+}
+
+static char *remove_double_spaces(char *input) {
+    char *dest = input;
+    int start_line = 0;
+    while (*input) {
+        while (*input == '\t') ++input;
+        if (start_line) {
+            while (*input == ' ') ++input;
+            start_line = 0;
+        } else {
+            while (*input == ' ' && *(input+1) == ' ') ++input;
+        }
+        if (*input == '\n') start_line = 1;
+        *dest++ = *input++;
+    }
+    *dest = 0;
+    return dest;
+}
+
 static int recalculate_line(const char *input) {
     const unsigned len = strlen(input);
     line = 1;
@@ -308,6 +351,10 @@ static void execute_command(const char *input, char params[32][MAX_TOKENS], int 
                 int pos = registers[get_index(params[1])];
                 printf("%s", memory+pos);
             } break;
+            case TYPE_INT: {
+                int pos = atoi(params[1]);
+                printf("%s", memory+pos);
+            } break;
             case TYPE_STRING: {
                 char string[128] = {0};
                 strcpy(string, params[1]+1);
@@ -325,18 +372,12 @@ static void execute_command(const char *input, char params[32][MAX_TOKENS], int 
 int main(void) {
     char tokens[32][MAX_TOKENS];
     
-    const char *input =
-        "STR 0 \"Hello, World!\"\n" // Puts the array of characters sequentially in memory starting at 0.
-        "SET REG[3] 12\n" // Set a total count of the characters.
-        "JSR print\n" // Jump into to print function.
-        "FUN print:\n"
-        "SET REG[2] MEM[REG[1]]\n" // set REG[2] to the current character, with REG[1] as a coutner
-        "OUT REG[2]\n" // Output the character
-        "INC REG[1]\n" // Increment the counter.
-        "CMP REG[3] REG[1]\n" // if REG[1] > REG[3], REG[31] = 0
-        "SKI\n" // Skips next command (and ends the program) if REG[31] == 0
-        "JSR print\n";
-    const unsigned input_length = strlen(input);
+    char *input;
+    unsigned input_length;
+    
+    input = read_file("file.asm", &input_length);
+    
+    remove_double_spaces(input);
     
     if (input[input_length-1] != '\n') {
         fprintf(stderr, "Error (Bottom of file): Your program must end with a newline.\n");
