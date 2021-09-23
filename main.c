@@ -13,7 +13,7 @@ typedef struct {
     int pos; // Position of function.
 } Function;
 
-u8 memory[4096] = {0};
+u8 memory[65536] = {0};
 u8 registers[32] = {0};
 
 ////////////////////////////////
@@ -35,6 +35,13 @@ enum {
     TYPE_MEMORY,
     TYPE_CHAR,
     TYPE_INT
+};
+
+enum {
+    OPERATION_ADD,
+    OPERATION_SUB,
+    OPERATION_DIV,
+    OPERATION_MUL
 };
 
 static int recalculate_line(const char *input) {
@@ -113,7 +120,10 @@ static void execute_command(const char *input, char params[32][MAX_TOKENS], int 
         switch (get_type(params[1])) {
             case TYPE_REGISTER: {
                 int index = get_index(params[1]);
-                if (index == 31) fprintf(stderr, "Error (Line %d): Cannot write to REG[31]!\n");
+                if (index == 31) {
+                    fprintf(stderr, "Error (Line %d): Cannot write to REG[31]!\n");
+                    return;
+                }
                 switch (get_type(params[2])) {
                     case TYPE_REGISTER: {
                         int to_index = get_index(params[2]);
@@ -154,7 +164,8 @@ static void execute_command(const char *input, char params[32][MAX_TOKENS], int 
     } else if (0==strcmp(params[0], "OUT")) {
         if (get_type(params[1]) == TYPE_REGISTER) {
             int index = get_index(params[1]);
-            putchar(registers[index]);
+            //putchar(registers[index]);
+            printf("%d\n", registers[index]);
         } else {
             fprintf(stderr, "Error(Line %d): \"OUT\" only takes in registers.\n", line);
         }
@@ -200,6 +211,54 @@ static void execute_command(const char *input, char params[32][MAX_TOKENS], int 
             }
             str[ch++] = input[curpos];
         }
+    } else if (0==strcmp(params[0], "ADD") || 0==strcmp(params[0], "SUB") || 0==strcmp(params[0], "MUL") || 0==strcmp(params[0], "DIV")) {
+        int operation;
+        if (0==strcmp(params[0], "ADD")) {
+            operation = OPERATION_ADD;
+        } else if (0==strcmp(params[0], "SUB")) {
+            operation = OPERATION_SUB;
+        } else if (0==strcmp(params[0], "MUL")) {
+            operation = OPERATION_MUL;
+        } else if (0==strcmp(params[0], "DIV")) {
+            operation = OPERATION_DIV;
+        }
+        if (get_type(params[1]) == TYPE_REGISTER && get_type(params[2]) == TYPE_REGISTER) {
+            int from_index = get_index(params[2]);
+            int to_index = get_index(params[1]);
+            if (to_index == 31) {
+                fprintf(stderr, "Error (Line %d): Cannot write to REG[31]!\n");
+                return;
+            }
+            switch (operation) {
+                case OPERATION_ADD: {
+                    registers[to_index] += registers[from_index];
+                } break;
+                case OPERATION_SUB: {
+                    registers[to_index] -= registers[from_index];
+                } break;
+                case OPERATION_MUL: {
+                    registers[to_index] *= registers[from_index];
+                } break;
+                case OPERATION_DIV: {
+                    registers[to_index] /= registers[from_index];
+                } break;
+            }
+        } else {
+            fprintf(stderr, "Error (Line %d): Maths operations work with registers only.\n");
+        }
+    } else if (0==strcmp(params[0], "INC") || 0==strcmp(params[0], "DEC")) {
+        int operation;
+        if (0==strcmp(params[0], "INC")) operation = OPERATION_ADD;
+        if (0==strcmp(params[0], "DEC")) operation = OPERATION_SUB;
+        if (get_type(params[1]) == TYPE_REGISTER) {
+            int index = get_index(params[1]);
+            if (operation == OPERATION_ADD)
+                registers[index]++;
+            else
+                registers[index]--;
+        } else {
+            fprintf(stderr, "Error (Line %d): Maths operations work with registers only.\n");
+        }
     }
 }
 
@@ -207,14 +266,11 @@ int main(void) {
     char tokens[32][MAX_TOKENS];
     
     const char *input =
-        "JSR main\n"
-        "FUN main:\n"
-        "SET REG[1] 65\n"
-        "OUT REG[1]\n"
-        "SET REG[1] 10\n"
-        "OUT REG[1]\n"
-        "JSR main\n"
-        "RET\n";
+        "JSR add\n"
+        "FUN add:\n"
+        "INC REG[0]\n"
+        "OUT REG[0]\n"
+        "JSR add\n";
     const unsigned input_length = strlen(input);
     
     if (input[input_length-1] != '\n') {
