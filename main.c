@@ -6,6 +6,7 @@
 #define STRING_MAX 255
 
 #define ctoi(c) (c - '0')
+#define string_compare(x, y) (0==strcmp(x, y))
 
 typedef unsigned char  u8;
 typedef unsigned short u16;
@@ -22,6 +23,7 @@ u8 registers[32] = {0};
 // Special registers:
 // REG[31] = used for CMP flag.
 // REG[30] = used for string lengths.
+// REG[29] = used for print mode.
 ////////////////////////////////
 
 int line = 1;
@@ -73,8 +75,9 @@ static char *read_file(const char *fp, unsigned *l) {
     return str;
 }
 
-static void cleanup_source(char *input) {
+static unsigned cleanup_source(char *input, char **output) {
     // Removing double spaces, comments, tabs, and whitespace from input.
+    // Also, add a newline at the end of the file.
     char *dest = input;
     char *start = input;
     int start_line = 0;
@@ -100,15 +103,26 @@ static void cleanup_source(char *input) {
         *dest++ = *input++;
     }
     *dest = 0;
+    
     input = start;
     dest = start;
+    
+    unsigned length = 0;
     
     // Remove trailing whitespace pass; the previous pass got rid of all multiple spaces in a row, so this is trivial.
     while (*input) {
         if (*input == ' ' && *(input+1) == '\n') ++input;
         *dest++ = *input++;
+        length++;
     }
-    *dest = 0;
+    input = start;
+    input = realloc(input, length+2);
+    input[length] = '\n';
+    input[length+1] = 0;
+    
+    *output = input;
+    
+    return length+1;
 }
 
 static int recalculate_line(const char *input) {
@@ -131,8 +145,8 @@ static u16 get_index(char parameter[32]) {
                 char integer[32];
                 strcpy(integer, parameter + i + 1);
                 int j;
-                for (j = 0; integer[j] == ']'; ++j); // Clipping off the ]
-                integer[j+1] = 0;
+                for (j = 0; integer[j] != ']'; ++j); // Clipping off the ]
+                integer[j] = 0;
                 last_index = atoi(integer);
             } else { // Get the next index in the chain.
                 if (reg) {
@@ -175,14 +189,19 @@ static void function_pass(const char *input, int input_length) {
     char curr_line[32];
     int ch = 0;
     int ln = 1;
+    int string = 0;
     for (int i = 0; i < input_length; i += 1) {
+        if (input[i] == '"') {
+            string = !string;
+        }
         if (input[i] == '\n') {
             ln++;
             ch = 0;
             memset(curr_line, 0, 32);
+            string = 0;
             continue;
         }
-        if (input[i] == ':') {
+        if (!string && input[i] == ':') {
             char str[32] = {0};
             strncpy(str, curr_line, 3);
             if (0 != strcmp(str, "SBR")) {
@@ -204,7 +223,7 @@ static void function_pass(const char *input, int input_length) {
 
 static void execute_command(const char *input, char params[32][MAX_TOKENS], int argc) {
     const u16 input_length = strlen(input);
-    if (0==strcmp(params[0], "SET")) {
+    if (string_compare(params[0], "SET")) {
         switch (get_type(params[1])) {
             case TYPE_REGISTER: {
                 u16 index = get_index(params[1]);
@@ -245,22 +264,25 @@ static void execute_command(const char *input, char params[32][MAX_TOKENS], int 
                 }
             } break;
         }
-    } else if (0==strcmp(params[0], "OUT")) {
+    } else if (string_compare(params[0], "OUT")) {
         if (get_type(params[1]) == TYPE_REGISTER) {
             u16 index = get_index(params[1]);
-            putchar(registers[index]);
-            //printf("%d\n", registers[index]);
+            if (registers[29] == 0) {
+                putchar(registers[index]);
+            } else {
+                printf("%d", registers[index]);
+            }
         } else {
             fprintf(stderr, "Error(Line %d): \"OUT\" only takes in registers.\n", line);
         }
-    } else if (0==strcmp(params[0], "GET")) {
+    } else if (string_compare(params[0], "GET")) {
         if (get_type(params[1]) == TYPE_REGISTER) {
             u16 index = get_index(params[1]);
             registers[index] = getchar();
         } else {
             fprintf(stderr, "Error(Line %d): \"GET\" only writes to a register.\n", line);
         }
-    } else if (0==strcmp(params[0], "CMP")) {
+    } else if (string_compare(params[0], "CMP")) {
         if (get_type(params[1]) != TYPE_REGISTER || get_type(params[2]) != TYPE_REGISTER) {
             fprintf(stderr, "Error(Line %d): \"CMP\" requires two registers.\n", line);
         } else {
@@ -270,28 +292,28 @@ static void execute_command(const char *input, char params[32][MAX_TOKENS], int 
             else if (registers[to_index] < registers[from_index]) registers[31] = 2;
             else                                                  registers[31] = 0;
         }
-    } else if (0==strcmp(params[0], "JSR")) {
+    } else if (string_compare(params[0], "JSR")) {
         for (int i = 0; i < function_count; i += 1) {
-            if (0==strcmp(functions[i].name, params[1])) {
+            if (string_compare(functions[i].name, params[1])) {
                 jump_to_subroutine(functions[i].pos);
                 recalculate_line(input);
             }
         }
-    } else if (0==strcmp(params[0], "SKP")) { // Skip next command if REG[31] == 0
+    } else if (string_compare(params[0], "SKP")) { // Skip next command if REG[31] == 0
         if (registers[31] == 0) {
             while (input[++curpos] != '\n');
             recalculate_line(input);
         }
-    } else if (0==strcmp(params[0], "RET")) {
+    } else if (string_compare(params[0], "RET")) {
         return_from_subroutine();
         recalculate_line(input);
-    } else if (0==strcmp(params[0], "SBR")) {
+    } else if (string_compare(params[0], "SBR")) {
         // Skip over subroutine. Only enter them when called by JSR or derivatives.
         char str[32] = {0};
         int ch = 0;
         for (; curpos < input_length; ++curpos) {
             if (input[curpos] == '\n') {
-                if (0==strcmp(str, "RET")) {
+                if (string_compare(str, "RET")) {
                     return;
                 }
                 memset(str, 0, 32);
@@ -300,15 +322,15 @@ static void execute_command(const char *input, char params[32][MAX_TOKENS], int 
             }
             str[ch++] = input[curpos];
         }
-    } else if (0==strcmp(params[0], "ADD") || 0==strcmp(params[0], "SUB") || 0==strcmp(params[0], "MUL") || 0==strcmp(params[0], "DIV")) {
+    } else if (string_compare(params[0], "ADD") || string_compare(params[0], "SUB") || string_compare(params[0], "MUL") || string_compare(params[0], "DIV")) {
         int operation;
-        if (0==strcmp(params[0], "ADD")) {
+        if (string_compare(params[0], "ADD")) {
             operation = OPERATION_ADD;
-        } else if (0==strcmp(params[0], "SUB")) {
+        } else if (string_compare(params[0], "SUB")) {
             operation = OPERATION_SUB;
-        } else if (0==strcmp(params[0], "MUL")) {
+        } else if (string_compare(params[0], "MUL")) {
             operation = OPERATION_MUL;
-        } else if (0==strcmp(params[0], "DIV")) {
+        } else if (string_compare(params[0], "DIV")) {
             operation = OPERATION_DIV;
         }
         if (get_type(params[1]) == TYPE_REGISTER && get_type(params[2]) == TYPE_REGISTER) {
@@ -331,10 +353,10 @@ static void execute_command(const char *input, char params[32][MAX_TOKENS], int 
         } else {
             fprintf(stderr, "Error (Line %d): Maths operations work with registers only.\n");
         }
-    } else if (0==strcmp(params[0], "INC") || 0==strcmp(params[0], "DEC")) {
+    } else if (string_compare(params[0], "INC") || string_compare(params[0], "DEC")) {
         int operation;
-        if (0==strcmp(params[0], "INC")) operation = OPERATION_ADD;
-        if (0==strcmp(params[0], "DEC")) operation = OPERATION_SUB;
+        if (string_compare(params[0], "INC")) operation = OPERATION_ADD;
+        if (string_compare(params[0], "DEC")) operation = OPERATION_SUB;
         if (get_type(params[1]) == TYPE_REGISTER) {
             u16 index = get_index(params[1]);
             if (operation == OPERATION_ADD)
@@ -344,7 +366,7 @@ static void execute_command(const char *input, char params[32][MAX_TOKENS], int 
         } else {
             fprintf(stderr, "Error (Line %d): Maths operations work with registers only.\n", line);
         }
-    } else if (0==strcmp(params[0], "STR")) { // Sets memory starting at position to null-terminated string data.
+    } else if (string_compare(params[0], "STR")) { // Sets memory starting at position to null-terminated string data.
         u16 pos = 0;
         switch (get_type(params[1])) {
             case TYPE_INT: {
@@ -369,7 +391,7 @@ static void execute_command(const char *input, char params[32][MAX_TOKENS], int 
         string[length] = 0;
         for (int i = 0; i <= length; ++i) // Include the null-terminator.
             memory[pos+i] = string[i];
-    } else if (0==strcmp(params[0], "OSR")) { // Output a string.
+    } else if (string_compare(params[0], "OSR")) { // Output a string.
         switch (get_type(params[1])) {
             case TYPE_REGISTER: {
                 u16 pos = registers[get_index(params[1])];
@@ -390,7 +412,7 @@ static void execute_command(const char *input, char params[32][MAX_TOKENS], int 
                 return;
             } break;
         }
-    } else if (0==strcmp(params[0], "LOD")) {
+    } else if (string_compare(params[0], "LOD")) {
         char file_path[STRING_MAX];
         unsigned len;
         u16 pos;
@@ -405,11 +427,9 @@ static void execute_command(const char *input, char params[32][MAX_TOKENS], int 
                 fprintf(stderr, "Error (Line %d): LOD requies register or integer as a start position.\n");
             } break;
         }
-        
         strcpy(file_path, params[2]);
         file_path[strlen(file_path)-1] = 0; // Clip the ending quote.
         char *str = read_file(file_path+1, &len); // Clip first quote.
-        
         // Load it into memory.
         for (int i = 0; i <= len; ++i) { // Include null-terminator.
             memory[i+pos] = str[i];
@@ -432,13 +452,7 @@ int main(int argcount, char **argv) {
     
     input = read_file(file, &input_length);
     
-    cleanup_source(input);
-    input_length = strlen(input);
-    
-    if (input[input_length-1] != '\n') {
-        fprintf(stderr, "Error (Bottom of file): Your program must end with a newline.\n");
-        return 1;
-    }
+    input_length = cleanup_source(input, &input);
     
     int argc = 0, ch = 0;
     
@@ -463,6 +477,7 @@ int main(int argcount, char **argv) {
             execute_command(input, params, argc);
             line++;
             argc = 0;
+            string = 0;
             ch = 0;
             memset(params, 0, sizeof(params));
             continue;

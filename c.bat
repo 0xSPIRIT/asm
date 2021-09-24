@@ -1,1 +1,1 @@
-gcc *.c -o bin/a.exe
+gcc -g *.c -o bin/a.exe
